@@ -597,6 +597,11 @@ func TestCloseLeavesGroup(t *testing.T) {
 			resp, err := conn.describeGroups(describeGroupsRequestV0{
 				GroupIDs: []string{groupID},
 			})
+			// this error can pop up in CI since the group is not created
+			// synchronously
+			if err == NotCoordinatorForGroup {
+				continue
+			}
 			if err != nil {
 				t.Fatalf("error from describeGroups %v", err)
 			}
