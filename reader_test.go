@@ -574,54 +574,45 @@ func TestCloseLeavesGroup(t *testing.T) {
 		MaxBytes: 10e6,
 		MaxWait:  100 * time.Millisecond,
 	})
-	prepareReader(t, ctx, r)
+	prepareReader(t, ctx, r, Message{Value: []byte("test")})
 	groupID := r.Config().GroupID
 
-	conn, err := Dial("tcp", "localhost:9092")
+	conn, err := Dial("tcp", r.config.Brokers[0])
 	if err != nil {
 		t.Fatalf("error dialing: %v", err)
 	}
 	defer conn.Close()
 
-	// wait for generationID > 0 so we know our reader has joined the group
-	membershipTimer := time.After(5 * time.Second)
-	checkTicker := time.NewTimer(100 * time.Millisecond)
-	defer checkTicker.Stop()
-
-	done := false
-	for !done {
-		select {
-		case <-membershipTimer:
-			t.Fatalf("our reader never joind its group")
-		case <-checkTicker.C:
-			resp, err := conn.describeGroups(describeGroupsRequestV0{
-				GroupIDs: []string{groupID},
-			})
-			// this error can pop up in CI since the group is not created
-			// synchronously
-			if err == NotCoordinatorForGroup {
-				continue
-			}
-			if err != nil {
-				t.Fatalf("error from describeGroups %v", err)
-			}
-			if len(resp.Groups) == 1 {
-				done = true
-			}
+	descGroups := func() describeGroupsResponseV0 {
+		resp, err := conn.describeGroups(describeGroupsRequestV0{
+			GroupIDs: []string{groupID},
+		})
+		if err != nil {
+			t.Fatalf("error from describeGroups %v", err)
 		}
+		return resp
+	}
+
+	recvCtx, recvCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer recvCancel()
+
+	_, err = r.ReadMessage(recvCtx)
+	if err != nil {
+		t.Fatalf("our reader never joind its group or couldn't read a message: %v", err)
+	}
+	resp := descGroups()
+	if len(resp.Groups) != 1 {
+		t.Fatalf("expected 1 group. got: %d", len(resp.Groups))
+	}
+	if len(resp.Groups[0].Members) != 1 {
+		t.Fatalf("expected group membership size of %d, but got %d", 1, len(resp.Groups[0].Members))
 	}
 
 	err = r.Close()
 	if err != nil {
 		t.Fatalf("unexpected error closing reader: %s", err.Error())
 	}
-
-	resp, err := conn.describeGroups(describeGroupsRequestV0{
-		GroupIDs: []string{groupID},
-	})
-	if err != nil {
-		t.Fatalf("error from describeGroups %v", err)
-	}
+	resp = descGroups()
 	if len(resp.Groups) != 1 {
 		t.Fatalf("expected 1 group. got: %d", len(resp.Groups))
 	}
